@@ -1,194 +1,33 @@
-# JS Handler Plugin
+# cpa-plugin-toolresultfixer
 
-A CLIProxyAPI plugin that executes external JavaScript scripts to intercept and modify requests, responses, and streaming chunks using the Goja VM engine.
+A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) request-interceptor plugin that keeps `tool_use`/`tool_result` pairing valid before a request reaches an upstream provider — implemented entirely in Go, with no embedded JS engine.
 
-Repository: https://github.com/router-for-me/cpa-plugin-jshandler
+## What it does
 
-## Acknowledgements
+Anthropic's Messages API requires every `tool_use` block to be paired with a `tool_result` in the very next message, and some providers additionally require `tool_result` blocks to appear in the same order their `tool_use` blocks were issued. Truncated history, interrupted turns, or out-of-order concurrent tool execution can violate either rule and trigger a hard 400 from upstream.
 
-This plugin's code comes entirely from [router-for-me/CLIProxyAPI#3768](https://github.com/router-for-me/CLIProxyAPI/pull/3768) by [easyatm](https://github.com/easyatm). Respect and thanks for the original contribution.
+On `InterceptRequestBeforeAuth`, this plugin:
 
-## License
+1. **Backfills orphaned `tool_use` calls.** For every `tool_use` whose id has no matching `tool_result` in the immediately following message, it appends a synthetic `tool_result` (`is_error: true`, with an explanatory message). If no user message immediately follows, it inserts one. This preserves the assistant's own reasoning/text history instead of dropping it, and lets the model react to the failure on its next turn.
+2. **Reorders out-of-order `tool_result` blocks.** Within a user message, `tool_result` blocks are sorted to match the dispatch order of the `tool_use` blocks in the preceding assistant message.
 
-This project is licensed under the [MIT License](LICENSE).
+If neither pass changes anything, the plugin returns an empty `RequestInterceptResponse.Body`, which by the CLIProxyAPI plugin ABI means the original request bytes pass through completely untouched — no parse/re-encode round trip at all.
 
-Copyright (c) 2026.6-present easyatm
+## Why not JS
 
-Copyright (c) 2026.6-present Router-For.ME
-
-## Features
-
-- **Request Interception** (`on_before_request`, `on_after_auth_request`): Modify request payloads and headers before and after credential selection.
-- **Response Interception** (`on_after_nonstream_response`): Modify non-streaming response bodies and headers.
-- **Stream Chunk Interception** (`on_after_stream_response`): Modify individual streaming chunks with read-only `history_chunks` context.
-- **Hot Reload**: Scripts are automatically reloaded when modified on disk.
-- **Execution Timeout**: Configurable timeout prevents infinite loops.
-- **Graceful Degradation**: Original data is preserved on JS execution errors.
-
-## Configuration
-
-```yaml
-plugins:
-  enabled: true
-  dir: "plugins-dir"
-  configs:
-    jshandler:
-      enabled: true
-      script_paths:
-        - /path/to/custom_handler.js
-        - ./relative_handler.js
-      timeout: 1s
-```
-
-### Fields
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | boolean | `true` | Enable or disable the plugin |
-| `script_paths` | array | `[]` | JS script file paths (absolute or relative to plugin directory) |
-| `timeout` | string | `1s` | Execution timeout per JS hook call |
-
-## JS Script API
-
-Scripts can export these global functions:
-
-### `on_before_request(ctx)`
-
-Called before credential selection. At this point the target upstream protocol is not selected yet.
-
-**ctx structure:**
-```javascript
-{
-    "id": "request-id",
-    "body": "...",        // Request body string
-    "headers": {},        // Request headers
-    "url": "",
-    "model": "gpt-4",
-    "protocol": "openai",
-    "source_format": "openai",
-    "sourceFormat": "openai",
-    "to_format": "",
-    "toFormat": ""
-}
-```
-
-### `on_after_auth_request(ctx)`
-
-Called after credential selection and before request translation, request normalization, and built-in payload configuration.
-
-**ctx structure:**
-```javascript
-{
-    "id": "request-id",
-    "body": "...",             // Request body string
-    "headers": {},             // Request headers
-    "url": "",
-    "model": "gpt-4",
-    "protocol": "openai",      // Same as source_format
-    "source_format": "openai",
-    "sourceFormat": "openai",
-    "to_format": "codex",
-    "toFormat": "codex"
-}
-```
-
-### `on_after_nonstream_response(ctx)`
-
-Called after a non-streaming response is received from upstream.
-
-**ctx structure (non-streaming):**
-```javascript
-{
-    "id": "request-id",
-    "body": "...",        // Full response body
-    "req": { "body": "...", "headers": {}, "url": "" },
-    "protocol": "openai",
-    "headers": {},
-    "chunk": null,
-    "history_chunks": null
-}
-```
-
-### `on_after_stream_response(ctx)`
-
-Called after each streaming response chunk is received from upstream.
-
-**ctx structure:**
-```javascript
-{
-    "id": "request-id",
-    "body": null,
-    "req": { "body": "...", "headers": {}, "url": "" },
-    "protocol": "openai",
-    "headers": {},
-    "chunk": "...",              // Current writable chunk
-    "history_chunks": ["..."]    // Read-only frozen array
-}
-```
-
-### Return Value
-
-Return the modified `ctx` object, or a plain string to replace the body/chunk.
-
-## Built-in Scripts
-
-The `scripts/` directory contains built-in scripts loaded automatically:
-
-- `copilot_handler.js`: Fixes tool-call `finish_reason` for GitHub Copilot compatibility.
+This plugin replaces [`cpa-plugin-jshandler`](https://github.com/router-for-me/cpa-plugin-jshandler) running a similar fixup script. The JS engine embedded there (goja) has a known bug handling unpaired/invalid UTF-16 surrogate pairs during `JSON.parse`/value export, which can silently corrupt request body content (replacing it with U+FFFD) even when the script itself made no changes. Doing the same JSON manipulation directly in Go removes that risk: Go strings are UTF-8 end to end, and `encoding/json` has no equivalent surrogate-pair defect. Numbers are decoded with `json.Number` so large integers survive the decode/re-encode round trip without float64 precision loss.
 
 ## Building
 
-```bash
-make build
+```
+make build            # builds ./toolresultfixer.<so|dylib|dll> for the host OS/arch
+make build GOOS=linux GOARCH=amd64
 ```
 
-The Makefile chooses the plugin extension from the target platform:
+## Testing
 
-| GOOS | Output |
-|------|--------|
-| `linux` / `freebsd` | `jshandler.so` |
-| `darwin` | `jshandler.dylib` |
-| `windows` | `jshandler.dll` |
-
-You can override the target and output directory:
-
-```bash
-make build GOOS=darwin GOARCH=arm64 BUILD_DIR=/path/to/plugins/darwin/arm64
+```
+go test ./...
 ```
 
-Release builds can inject the runtime plugin version:
-
-```bash
-make build VERSION=0.1.0
-```
-
-## Plugin Store Release Assets
-
-The GitHub Actions workflow builds plugin-store-compatible archives for:
-
-| GOOS | GOARCH | Runner |
-|------|--------|--------|
-| `linux` | `amd64` | `ubuntu-24.04` |
-| `linux` | `arm64` | `ubuntu-24.04-arm` |
-| `freebsd` | `amd64` | `go-cross/cgo-actions` on `ubuntu-24.04` |
-| `darwin` | `amd64` | `macos-15-intel` |
-| `darwin` | `arm64` | `macos-15` |
-| `windows` | `amd64` | `windows-2025` |
-| `windows` | `arm64` | `go-cross/cgo-actions` on `ubuntu-24.04` |
-
-FreeBSD release builds are limited to `amd64` because Go does not support `-buildmode=c-shared` for `freebsd/arm64`.
-
-Tag pushes such as `v0.1.0` publish release assets named:
-
-```text
-jshandler_0.1.0_linux_amd64.zip
-jshandler_0.1.0_linux_arm64.zip
-jshandler_0.1.0_freebsd_amd64.zip
-jshandler_0.1.0_darwin_amd64.zip
-jshandler_0.1.0_darwin_arm64.zip
-jshandler_0.1.0_windows_amd64.zip
-jshandler_0.1.0_windows_arm64.zip
-checksums.txt
-```
-
-Each archive contains the platform dynamic library at the zip root, using the filename expected by the CLIProxyAPI plugin store: `jshandler.so`, `jshandler.dylib`, or `jshandler.dll`.
+Tests cover: no-op pass-through when already paired, backfilling a missing `tool_result` among several, wrapping a string `content` field before backfill, inserting a new user message when none/an assistant message follows, reordering out-of-order results while preserving other content blocks, refusing to reorder when there's nothing reliable to sort by, byte-for-byte pass-through and correct round-tripping of Unicode/emoji content, and preservation of large integer literals across a forced rewrite.

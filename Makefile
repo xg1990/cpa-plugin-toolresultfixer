@@ -1,4 +1,4 @@
-PLUGIN_NAME ?= jshandler
+PLUGIN_NAME ?= toolresultfixer
 VERSION ?= 0.1.0
 BUILD_DIR ?= .
 GOOS ?= $(shell go env GOOS)

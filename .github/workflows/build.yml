@@ -11,7 +11,7 @@ permissions:
   contents: write
 
 env:
-  PLUGIN_ID: jshandler
+  PLUGIN_ID: toolresultfixer
 
 jobs:
   test:
