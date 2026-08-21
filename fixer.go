@@ -165,14 +165,18 @@ func reorderToolResults(messages []interface{}) ([]interface{}, bool) {
 
 		var toolResults []map[string]interface{}
 		var others []interface{}
+		hasOthersBeforeToolResult := false
 		for _, part := range content {
 			if partMap, ok := part.(map[string]interface{}); ok && asString(partMap["type"]) == "tool_result" && asString(partMap["tool_use_id"]) != "" {
+				if len(others) > 0 {
+					hasOthersBeforeToolResult = true
+				}
 				toolResults = append(toolResults, partMap)
 			} else {
 				others = append(others, part)
 			}
 		}
-		if len(toolResults) <= 1 {
+		if len(toolResults) == 0 {
 			continue
 		}
 
@@ -199,23 +203,40 @@ func reorderToolResults(messages []interface{}) ([]interface{}, bool) {
 				break
 			}
 		}
-		if len(expectedOrder) <= 1 {
-			continue
-		}
 
 		indexOf := make(map[string]int, len(expectedOrder))
 		for idx, id := range expectedOrder {
 			indexOf[id] = idx
 		}
-		sort.SliceStable(toolResults, func(a, b int) bool {
-			return toolResultOrderIndex(toolResults[a], indexOf) < toolResultOrderIndex(toolResults[b], indexOf)
-		})
 
-		newContent := make([]interface{}, 0, len(others)+len(toolResults))
-		newContent = append(newContent, others...)
+		needsSort := false
+		if len(expectedOrder) > 1 && len(toolResults) > 1 {
+			for idx := 0; idx < len(toolResults)-1; idx++ {
+				if toolResultOrderIndex(toolResults[idx], indexOf) > toolResultOrderIndex(toolResults[idx+1], indexOf) {
+					needsSort = true
+					break
+				}
+			}
+		}
+
+		if !hasOthersBeforeToolResult && !needsSort {
+			continue
+		}
+
+		if needsSort {
+			sort.SliceStable(toolResults, func(a, b int) bool {
+				return toolResultOrderIndex(toolResults[a], indexOf) < toolResultOrderIndex(toolResults[b], indexOf)
+			})
+		}
+
+		// Anthropic requires tool_result blocks to appear first in the message
+		// following a tool_use turn. Any trailing non-tool_result content (e.g. user
+		// text or system reminders) must follow the tool_results.
+		newContent := make([]interface{}, 0, len(toolResults)+len(others))
 		for _, tr := range toolResults {
 			newContent = append(newContent, tr)
 		}
+		newContent = append(newContent, others...)
 		msg["content"] = newContent
 		changed = true
 	}

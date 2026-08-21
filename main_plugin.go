@@ -6,7 +6,7 @@ import (
 
 const pluginID = "toolresultfixer"
 
-var pluginVersion = "0.1.0"
+var pluginVersion = "0.1.1"
 
 func buildPlugin() pluginapi.Plugin {
 	p := &toolResultFixerPlugin{}

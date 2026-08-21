@@ -164,11 +164,11 @@ func TestFixToolResultPairing_WrapsStringContentBeforeBackfill(t *testing.T) {
 	if len(content) != 2 {
 		t.Fatalf("expected the string content to be wrapped and the synthetic result appended, got %d parts", len(content))
 	}
-	if partField(t, content[0], "type") != "text" || partField(t, content[0], "text") != "please continue" {
-		t.Fatalf("expected the original string content preserved as a text block, got %#v", content[0])
+	if partField(t, content[0], "type") != "tool_result" || partField(t, content[0], "tool_use_id") != "tu_1" {
+		t.Fatalf("expected the synthetic tool_result to be placed first, got %#v", content[0])
 	}
-	if partField(t, content[1], "tool_use_id") != "tu_1" {
-		t.Fatalf("expected a synthetic tool_result for tu_1, got %#v", content[1])
+	if partField(t, content[1], "type") != "text" || partField(t, content[1], "text") != "please continue" {
+		t.Fatalf("expected the original string content preserved as a trailing text block, got %#v", content[1])
 	}
 }
 
@@ -260,7 +260,7 @@ func TestFixToolResultPairing_ReordersOutOfOrderToolResults(t *testing.T) {
 	}
 }
 
-func TestFixToolResultPairing_ReorderKeepsOtherContentBeforeToolResults(t *testing.T) {
+func TestFixToolResultPairing_ReorderPlacesToolResultsBeforeOtherContent(t *testing.T) {
 	body := []byte(`{"messages":[
 		{"role":"assistant","content":[
 			{"type":"tool_use","id":"tu_1","name":"a","input":{}},
@@ -283,29 +283,63 @@ func TestFixToolResultPairing_ReorderKeepsOtherContentBeforeToolResults(t *testi
 	if len(content) != 3 {
 		t.Fatalf("expected 3 content parts preserved, got %d", len(content))
 	}
-	if partField(t, content[0], "type") != "text" {
-		t.Fatalf("expected the non-tool_result part to be moved ahead of the tool_results, got %#v", content[0])
+	if partField(t, content[0], "tool_use_id") != "tu_1" || partField(t, content[1], "tool_use_id") != "tu_2" {
+		t.Fatalf("expected tool_results sorted to tu_1, tu_2 at the start of the message, got %#v", content[:2])
 	}
-	if partField(t, content[1], "tool_use_id") != "tu_1" || partField(t, content[2], "tool_use_id") != "tu_2" {
-		t.Fatalf("expected tool_results reordered to tu_1, tu_2 after the text part, got %#v", content[1:])
+	if partField(t, content[2], "type") != "text" {
+		t.Fatalf("expected the non-tool_result part to be moved after all tool_results, got %#v", content[2])
 	}
 }
 
-func TestFixToolResultPairing_DoesNotReorderASingleToolResult(t *testing.T) {
+func TestFixToolResultPairing_NoChangeWhenToolResultsAlreadyFirstAndSorted(t *testing.T) {
+	// A user message with tool_results first and user text at the end ("继续")
+	// must NOT be mutated if tool_results are already in dispatch order.
 	body := []byte(`{"messages":[
-		{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"a","input":{}}]},
+		{"role":"assistant","content":[
+			{"type":"tool_use","id":"tu_1","name":"a","input":{}},
+			{"type":"tool_use","id":"tu_2","name":"b","input":{}}
+		]},
 		{"role":"user","content":[
-			{"type":"text","text":"note"},
-			{"type":"tool_result","tool_use_id":"tu_1","content":"ok"}
+			{"type":"tool_result","tool_use_id":"tu_1","content":"first"},
+			{"type":"tool_result","tool_use_id":"tu_2","content":"second"},
+			{"type":"text","text":"继续"}
 		]}
 	]}`)
 
 	fixed, changed := fixToolResultPairing(body)
 	if changed {
-		t.Fatalf("expected no change: single tool_result has nothing to reorder against and is already paired")
+		t.Fatalf("expected no change when tool_results are already sorted and precede trailing text")
 	}
 	if !bytes.Equal(fixed, body) {
-		t.Fatalf("expected pass-through bytes when unchanged")
+		t.Fatalf("expected exact byte pass-through")
+	}
+}
+
+func TestFixToolResultPairing_MovesToolResultBeforeOtherContentWhenPrepended(t *testing.T) {
+	// If a text block precedes a tool_result, Anthropic rejects the turn.
+	// The fixer must move the tool_result ahead of the text.
+	body := []byte(`{"messages":[
+		{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"a","input":{}}]},
+		{"role":"user","content":[
+			{"type":"text","text":"note before tool_result"},
+			{"type":"tool_result","tool_use_id":"tu_1","content":"ok"}
+		]}
+	]}`)
+
+	fixed, changed := fixToolResultPairing(body)
+	if !changed {
+		t.Fatalf("expected a change: text preceded the tool_result")
+	}
+	root := decodeForAssertions(t, fixed)
+	content := contentOf(t, messagesOf(t, root)[1])
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content parts, got %d", len(content))
+	}
+	if partField(t, content[0], "type") != "tool_result" || partField(t, content[0], "tool_use_id") != "tu_1" {
+		t.Fatalf("expected tool_result moved to first position, got %#v", content[0])
+	}
+	if partField(t, content[1], "type") != "text" {
+		t.Fatalf("expected text block moved after tool_result, got %#v", content[1])
 	}
 }
 
