@@ -484,6 +484,39 @@ func TestFixToolResultPairing_MergesConsecutiveUserMessagesAndPlacesResultsFirst
 	}
 }
 
+func TestFixToolResultPairing_MergesSystemReminderAfterToolResult(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"assistant","content":[{"type":"tool_use","id":"Bash-21","name":"Bash","input":{}}]},
+		{"role":"user","content":[
+			{"type":"tool_result","tool_use_id":"Bash-21","content":"result"},
+			{"type":"text","text":"user follow-up"}
+		]},
+		{"role":"system","content":[{"type":"text","text":"<system-reminder>continue</system-reminder>"}]}
+	]}`)
+
+	fixed, changed := fixToolResultPairing(body)
+	if !changed {
+		t.Fatalf("expected system reminder after tool result to be merged")
+	}
+
+	root := decodeForAssertions(t, fixed)
+	messages := messagesOf(t, root)
+	if len(messages) != 2 {
+		t.Fatalf("expected system reminder to merge into preceding user message, got %d messages", len(messages))
+	}
+
+	userContent := messages[1].(map[string]interface{})["content"].([]interface{})
+	if len(userContent) != 3 {
+		t.Fatalf("expected tool result and two text blocks, got %d parts", len(userContent))
+	}
+	if userContent[0].(map[string]interface{})["type"] != "tool_result" {
+		t.Fatalf("expected tool_result to remain first")
+	}
+	if userContent[2].(map[string]interface{})["text"] != "<system-reminder>continue</system-reminder>" {
+		t.Fatalf("expected system reminder content to be preserved")
+	}
+}
+
 func jsonEscape(s string) string {
 	raw, err := json.Marshal(s)
 	if err != nil {

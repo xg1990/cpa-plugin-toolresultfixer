@@ -29,10 +29,11 @@ func fixToolResultPairing(body []byte) (fixed []byte, changed bool) {
 		return body, false
 	}
 
+	messages, systemMerged := mergeSystemMessagesAfterToolResults(messages)
 	messages, merged := mergeConsecutiveSameRoleMessages(messages)
 	messages, backfilled := backfillOrphanedToolUse(messages)
 	messages, reordered := reorderToolResults(messages)
-	if !merged && !backfilled && !reordered {
+	if !systemMerged && !merged && !backfilled && !reordered {
 		return body, false
 	}
 
@@ -254,6 +255,52 @@ func toolResultOrderIndex(toolResult map[string]interface{}, indexOf map[string]
 func asString(v interface{}) string {
 	s, _ := v.(string)
 	return s
+}
+
+func mergeSystemMessagesAfterToolResults(messages []interface{}) ([]interface{}, bool) {
+	if len(messages) <= 1 {
+		return messages, false
+	}
+
+	changed := false
+	out := make([]interface{}, 0, len(messages))
+
+	for i := 0; i < len(messages); i++ {
+		msg, ok := messages[i].(map[string]interface{})
+		if !ok {
+			out = append(out, messages[i])
+			continue
+		}
+
+		role := asString(msg["role"])
+		if (role == "system" || role == "developer") && len(out) > 0 {
+			prevMsg, prevOk := out[len(out)-1].(map[string]interface{})
+			if prevOk && asString(prevMsg["role"]) == "user" && messageHasToolResult(prevMsg) {
+				prevContent := normalizeMessageContent(prevMsg["content"])
+				currContent := normalizeMessageContent(msg["content"])
+				prevMsg["content"] = append(prevContent, currContent...)
+				changed = true
+				continue
+			}
+		}
+
+		out = append(out, msg)
+	}
+
+	return out, changed
+}
+
+func messageHasToolResult(msg map[string]interface{}) bool {
+	content, ok := msg["content"].([]interface{})
+	if !ok {
+		return false
+	}
+	for _, part := range content {
+		if partMap, ok := part.(map[string]interface{}); ok && asString(partMap["type"]) == "tool_result" && asString(partMap["tool_use_id"]) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeConsecutiveSameRoleMessages(messages []interface{}) ([]interface{}, bool) {
