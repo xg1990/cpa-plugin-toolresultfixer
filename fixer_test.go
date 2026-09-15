@@ -425,6 +425,65 @@ func TestFixToolResultPairing_PreservesLargeNumbersAcrossRewrite(t *testing.T) {
 	}
 }
 
+func TestFixToolResultPairing_MergesConsecutiveUserMessagesAndPlacesResultsFirst(t *testing.T) {
+	body := []byte(`{"messages":[
+		{"role":"assistant","content":[
+			{"type":"tool_use","id":"cpa_gemini_1","name":"a","input":{}},
+			{"type":"tool_use","id":"cpa_gemini_2","name":"b","input":{}},
+			{"type":"tool_use","id":"cpa_gemini_3","name":"c","input":{}}
+		]},
+		{"role":"user","content":"intermediate text from user or injected hook"},
+		{"role":"user","content":[
+			{"type":"tool_result","tool_use_id":"cpa_gemini_3","content":"third"},
+			{"type":"tool_result","tool_use_id":"cpa_gemini_1","content":"first"}
+		]}
+	]}`)
+
+	fixed, changed := fixToolResultPairing(body)
+	if !changed {
+		t.Fatalf("expected changed=true for consecutive user messages with missing tool_result")
+	}
+
+	root := decodeForAssertions(t, fixed)
+	messages := messagesOf(t, root)
+	if len(messages) != 2 {
+		t.Fatalf("expected messages to be merged into 2 (assistant, user), got %d", len(messages))
+	}
+
+	userMsg := messages[1].(map[string]interface{})
+	if userMsg["role"] != "user" {
+		t.Fatalf("expected second message to be user")
+	}
+
+	content := userMsg["content"].([]interface{})
+	if len(content) != 4 {
+		t.Fatalf("expected 4 parts (3 tool_results + 1 trailing text), got %d", len(content))
+	}
+
+	expectedIDs := []string{"cpa_gemini_1", "cpa_gemini_2", "cpa_gemini_3"}
+	for i, expectedID := range expectedIDs {
+		part := content[i].(map[string]interface{})
+		if part["type"] != "tool_result" {
+			t.Fatalf("expected content[%d] to be tool_result, got %v", i, part["type"])
+		}
+		if part["tool_use_id"] != expectedID {
+			t.Fatalf("expected content[%d] tool_use_id to be %s, got %v", i, expectedID, part["tool_use_id"])
+		}
+	}
+
+	// 缺失的 cpa_gemini_2 应由 synthetic 补齐且带有 is_error
+	cpaGemini2 := content[1].(map[string]interface{})
+	if cpaGemini2["is_error"] != true {
+		t.Fatalf("expected backfilled tool_result to have is_error=true")
+	}
+
+	// 文本内容必须排在 tool_results 之后
+	lastPart := content[3].(map[string]interface{})
+	if lastPart["type"] != "text" || lastPart["text"] != "intermediate text from user or injected hook" {
+		t.Fatalf("expected trailing text block to follow tool_results, got: %v", lastPart)
+	}
+}
+
 func jsonEscape(s string) string {
 	raw, err := json.Marshal(s)
 	if err != nil {

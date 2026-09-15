@@ -4,9 +4,9 @@
     {
       "id": "toolresultfixer",
       "name": "Tool Result Fixer",
-      "description": "Backfills missing tool_result blocks for orphaned tool_use calls and reorders out-of-order tool_result blocks, without any JS engine in the request path.",
+      "description": "Backfills missing tool_result blocks for orphaned tool_use calls, merges consecutive same-role messages, and reorders out-of-order tool_result blocks, without any JS engine in the request path.",
       "author": "xg1990",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "repository": "https://github.com/xg1990/cpa-plugin-toolresultfixer",
       "homepage": "https://github.com/xg1990/cpa-plugin-toolresultfixer",
       "license": "MIT",
