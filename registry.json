@@ -4,9 +4,9 @@
     {
       "id": "toolresultfixer",
       "name": "Tool Result Fixer",
-      "description": "Backfills missing tool_result blocks for orphaned tool_use calls, merges consecutive same-role messages and trailing system reminders after tool results, and reorders out-of-order tool_result blocks, without any JS engine in the request path.",
+      "description": "Repairs tool-call history only for Antigravity claude-sonnet-4-6 requests: merges reminders after tool results, backfills missing results, and reorders result blocks.",
       "author": "xg1990",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "repository": "https://github.com/xg1990/cpa-plugin-toolresultfixer",
       "homepage": "https://github.com/xg1990/cpa-plugin-toolresultfixer",
       "license": "MIT",

@@ -6,12 +6,14 @@ A [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) request-intercepto
 
 Anthropic's Messages API requires every `tool_use` block to be paired with a `tool_result` in the very next message, and some providers additionally require `tool_result` blocks to appear in the same order their `tool_use` blocks were issued. Truncated history, interrupted turns, or out-of-order concurrent tool execution can violate either rule and trigger a hard 400 from upstream.
 
-On `InterceptRequestBeforeAuth`, this plugin:
+On `InterceptRequestAfterAuth`, this plugin runs only when the selected upstream format is `antigravity` and the requested model is exactly `claude-sonnet-4-6`. Requests for Sonnet 5, other providers, and other models pass through unchanged. For matching requests it:
 
-1. **Backfills orphaned `tool_use` calls.** For every `tool_use` whose id has no matching `tool_result` in the immediately following message, it appends a synthetic `tool_result` (`is_error: true`, with an explanatory message). If no user message immediately follows, it inserts one. This preserves the assistant's own reasoning/text history instead of dropping it, and lets the model react to the failure on its next turn.
-2. **Reorders out-of-order `tool_result` blocks.** Within a user message, `tool_result` blocks are sorted to match the dispatch order of the `tool_use` blocks in the preceding assistant message.
+1. **Merges trailing system reminders after tool results.** A `system` or `developer` reminder immediately after a user message containing tool results is folded into that user content so the upstream sees one valid turn.
+2. **Merges consecutive same-role messages.** Adjacent user messages are combined, while assistant messages are combined only when the earlier assistant message has no tool calls.
+3. **Backfills orphaned `tool_use` calls.** For every `tool_use` whose id has no matching `tool_result` in the immediately following message, it appends a synthetic `tool_result` (`is_error: true`, with an explanatory message). If no user message immediately follows, it inserts one.
+4. **Reorders out-of-order `tool_result` blocks.** Within a user message, `tool_result` blocks are sorted to match the dispatch order of the `tool_use` blocks in the preceding assistant message.
 
-If neither pass changes anything, the plugin returns an empty `RequestInterceptResponse.Body`, which by the CLIProxyAPI plugin ABI means the original request bytes pass through completely untouched — no parse/re-encode round trip at all.
+If none of these passes changes a matching request, or if the request is outside the Antigravity Sonnet 4.6 scope, the plugin returns an empty `RequestInterceptResponse.Body`, so the original request bytes pass through completely untouched.
 
 ## Why not JS
 
